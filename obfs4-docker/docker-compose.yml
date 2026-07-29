@@ -1,0 +1,37 @@
+services:
+  obfs4-bridge:
+    image: thetorproject/obfs4-bridge:latest
+    networks:
+      - obfs4_bridge_external_network
+    environment:
+      - OR_PORT=${OR_PORT:?Env var OR_PORT is not set.}
+      - PT_PORT=${PT_PORT:?Env var PT_PORT is not set.}
+      - EMAIL=${EMAIL:?Env var EMAIL is not set.}
+      - NICKNAME=${NICKNAME:-DockerObfs4Bridge}
+    env_file:
+      - .env
+    volumes:
+      - data:/var/lib/tor
+    ports:
+      - ${OR_PORT}:${OR_PORT}
+      - ${PT_PORT}:${PT_PORT}
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  data:
+    name: tor-datadir-${OR_PORT}-${PT_PORT}
+
+networks:
+  obfs4_bridge_external_network:

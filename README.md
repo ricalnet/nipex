@@ -18,81 +18,115 @@
 
 ---
 
-### Summary
+### Overview
 
-The Tor project allows users to surf the Internet, chat and send instant messages anonymously through its own mechanism. 
-It is used by a wide variety of people, companies and organizations, both for lawful activities and for other illicit purposes. Tor has been largely used by intelligence agencies, hacking groups, criminal activities and even ordinary users who care about their privacy in the digital world.
-  
-Nipe is an engine, developed in Perl, that aims on making the Tor network your default network gateway. Nipe can route the traffic from your machine to the Internet through Tor network, so you can surf the Internet having a more formidable stance on privacy and anonymity in cyberspace.
+**NipeX (Nipe Extended)** is a fork of [Nipe](https://github.com/htrgouvea/nipe) by Heitor Gouvêa, extended with various additional privacy & security tools. Built for Debian systems, NipeX integrates Nipe with other essential tools for cleaning metadata, managing MAC addresses, configuring firewalls (UFW), monitoring traffic, scanning for rootkits, and much more, all from a single user-friendly interface.
 
-Nipe supports both IPv4 and IPv6 traffic routing through the Tor network. Only traffic destined for local and/or loopback addresses is not routed through Tor. All non-local UDP/ICMP traffic is also blocked by the Tor project.
-
-Nipe uses iptables and ip6tables to apply redirection rules for IPv4 and IPv6 traffic respectively. If you may have rules applied to these utilities, during the start process, conflicts may occur. When you stop running the Nipe services, all departure rules are removed, not differentiating between the already existing ones and the Nipe rules.
+In addition to using Tor as the default gateway, you can also deploy your own obfs4 bridge using Docker to enhance resilience against censorship and Tor network blocking. This feature allows you to run a private obfs4 bridge that can help other users access the Tor network in highly restricted environments.
 
 ---
 
-### Download and install
+### Download and Install
 
 ```bash
-  # Download
-  $ git clone https://github.com/htrgouvea/nipe && cd nipe
+# Download the NipeX repository
+git clone https://github.com/ricalnet/nipex && cd nipex
     
-  # Install libs and dependencies
-  $ cpanm --installdeps .
+# Install libraries and dependencies
+sudo apt install -y cpanminus && sudo cpanm --installdeps .
 
-  # Nipe must be run as root
-  $ perl nipe.pl install
+# Nipe must be run as root
+sudo perl nipe.pl install
+  
+# Run NipeX
+./main.sh
 ```
+
 ---
 
 ### Commands:
 ```
-  COMMAND          FUNCTION
-  install          Install dependencies
-  start            Start routing
-  stop             Stop routing
-  restart          Restart the Nipe circuit
-  status           See status
+╔═════════════════════════════════════════════════════════╗
+║                    ____    _______                      ║
+║                   /    \  |       \                     ║
+║                  |  ()  | | PRIVACY!                    ║
+║                   \____/  |_______/                     ║
+║                                                         ║
+║               N I P E   E X T E N D E D                 ║
+║              Privacy & Security Toolkit                 ║
+║                                                         ║
+║           https://github.com/ricalnet/nipex/            ║
+╚═════════════════════════════════════════════════════════╝
 
-  Examples:
+PRIVACY TOOLS
+  1) Change hostname
+  2) Change timezone
+  3) Set DNS (LibreDNS+Quad9)
+  4) MAC management (random/custom)
+  5) Remove file metadata (MAT2)
 
-  perl nipe.pl install
-  perl nipe.pl start
-  perl nipe.pl stop
-  perl nipe.pl restart
-  perl nipe.pl status
+SECURITY TOOLS
+  6) Check file integrity
+  7) Password generator
+  8) Firewall (UFW)
+  9) Monitor traffic (tcpdump)
+ 10) Rootkit Hunter (rkhunter)
+ 11) Service status
+ 12) System monitor (htop)
+
+MAIN TOOLS
+ 13) Main Tools (Nipe)
+ 14) Deploy obfs4-Docker
+
+  0) Exit
+
+Select menu [0-14]: 
 ```
 
 ---
 
-### Demo
+### Deploy Your Own obfs4 Bridge
 
-![Image](https://heitorgouvea.me/images/projects/nipe/demo.gif)
+NipeX includes support for deploying your own obfs4 bridge using Docker. An obfs4 bridge is a type of Tor bridge that uses obfuscation protocols to hide Tor traffic, making it more difficult to detect and block. By deploying your own obfs4 bridge, you can:
+
+- Help other users access the Tor network in heavily censored environments
+- Improve the overall resilience of the Tor network
+- Run a private bridge that you can use yourself or share
+
+To deploy an obfs4 bridge:
+
+1. Make sure Docker and Docker Compose are installed on your system. If not, you can use the provided installation scripts:
+   ```bash
+   # For Debian
+   curl -O https://raw.githubusercontent.com/ricalnet/digital-independence/main/install-docker-engine-on-debian.sh
+   chmod +x install-docker-engine-on-debian.sh
+   ./install-docker-engine-on-debian.sh
+   
+   # Or for Ubuntu
+   curl -O https://raw.githubusercontent.com/ricalnet/digital-independence/main/install-docker-engine-on-ubuntu.sh
+   chmod +x install-docker-engine-on-ubuntu.sh
+   ./install-docker-engine-on-ubuntu.sh
+   ```
+2. Edit and customize the `.env` file from the `obfs4-docker` directory:
+   ```bash
+   cd obfs4-docker
+   cp .env.example .env
+   nano .env  # or use your preferred text editor
+   ```
+   Customize variables such as `OR_PORT`, `PT_PORT`, `NICKNAME`, `EMAIL`, and others according to your needs.
+3. Run NipeX and select menu **14) Deploy obfs4-Docker**
+4. Use the **Start** option to run the obfs4 bridge container
+5. Verify that the bridge is running properly using the **Verify** option
+6. Your bridge will be available and can be used by Tor clients that need it
 
 ---
 
-### Docker container
+### Contributing
 
-```bash
-# Building the container
-$ docker build -t nipe .
-
-# Setup the Nipe container
-$ docker run -d -it --name nipe-container --privileged --cap-add=NET_ADMIN nipe
-
-# Running commands
-$ docker exec -it nipe-container ./nipe.pl <your command>
-
-```
-
----
-
-### Contribution
-
-Your contributions and suggestions are heartily ♥ welcome. [See here the contribution guidelines.](/.github/CONTRIBUTING.md) Please, report bugs via [issues page](https://github.com/htrgouvea/nipe/issues) and for security issues, see here the [security policy.](/SECURITY.md) (✿ ◕‿◕)
+Your contributions and suggestions are very welcome ♥. [See the contribution guide here.](/.github/CONTRIBUTING.md) Please report bugs through the [issues page](https://github.com/ricalnet/NipeX/issues) and for security issues, see the [security policy here.](/SECURITY.md) (✿ ◕‿◕)
 
 ---
 
 ### License
 
-This work is licensed under [MIT License.](/LICENSE.md)
+This work is licensed under the [MIT License.](/LICENSE.md)
