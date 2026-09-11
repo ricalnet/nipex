@@ -529,14 +529,33 @@ cmd_wipe_history() {
 
 cmd_wipe_cache() {
     shopt -s nullglob
-    local dirs=(
-        "$HOME/.cache"
-        "$HOME/.mozilla/firefox"/*/cache2
-        "$HOME/.config/chromium"/*/Cache
-        "$HOME/.config/google-chrome"/*/Cache
-        "$HOME/.local/share/Trash"
-    )
+    local dirs=("$HOME/.cache" "$HOME/.local/share/Trash")
+
+    # Firefox
+    dirs+=("$HOME/.mozilla/firefox"/*/cache2)
+
+    # Chromium-based browsers
+    local browser
+    for browser in \
+        "$HOME/.config/chromium" \
+        "$HOME/.config/google-chrome" \
+        "$HOME/.config/BraveSoftware/Brave-Browser" \
+        "$HOME/.config/BraveSoftware/Brave-Origin"; do
+        dirs+=(
+            "$browser"/*/Cache
+            "$browser"/*/GPUCache
+            "$browser"/*/DawnWebGPUCache
+            "$browser"/*/DawnGraphiteCache
+            "$browser"/*/"Service Worker"/CacheStorage
+            "$browser"/*/"Service Worker"/ScriptCache
+            "$browser"/*/"Shared Dictionary"/cache
+            "$browser"/GPUPersistentCache
+            "$browser"/component_crx_cache
+            "$browser"/extensions_crx_cache
+        )
+    done
     shopt -u nullglob
+
     for d in "${dirs[@]}"; do
         [[ -d "$d" && "$d" == "$HOME"/* ]] || continue
         info "Wiping: $d"
