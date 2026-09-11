@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1"
+VERSION="0.1.2"
 LOGFILE="${NIPEX_LOG_FILE:-$HOME/.nipex.log}"
 LOGGING="${NIPEX_LOG:-0}"
 CONF="$HOME/.nipex.conf"
@@ -17,7 +17,7 @@ NIPE_DIR="${NIPE_DIR:-$SELF_DIR}"
 NIPE_PL="$NIPE_DIR/nipe.pl"
 
 R=$'\033[0;31m'; G=$'\033[0;32m'; Y=$'\033[1;33m'
-C=$'\033[0;36m'; B=$'\033[1m'; N=$'\033[0m'
+C=$'\033[0;36m'; B=$'\033[1m'; M=$'\033[0;35m'; N=$'\033[0m'
 
 log()  { [[ "$LOGGING" == "1" ]] && echo "$(date '+%F %T') $*" >> "$LOGFILE" || true; }
 info() { echo "${C}[i]${N} $*"; log "INFO: $*"; }
@@ -51,44 +51,70 @@ need_pubkey() {
     printf '%s\n' "$pub"
 }
 
+SNAPSHOT_DIR="/dev/shm/nipex-session"
+SYSTEMD_UNIT="/etc/systemd/system/nipex-privacy-restore.service"
+
 cmd_help() {
     cat << EOF
+╔═════════════════════════════════════════════════════════╗
+║                    ____    _______                      ║
+║                   /    \  |       \                     ║
+║                  |  ()  | | PRIVACY!                    ║
+║                   \____/  |_______/                     ║
+║                                                         ║
+║               N I P E   E X T E N D E D                 ║
+║              Privacy & Security Toolkit                 ║
+║                                                         ║
+║         https://git.ricalnet.my.id/rical/nipex/         ║
+╚═════════════════════════════════════════════════════════╝
+
 ${B}NipeX v${VERSION}${N} - Privacy & Security Toolkit
 
 ${B}USAGE${N}:  nipex <command> [args]
 
-${B}LEGEND${N}: ${Y}*${N} = requires sudo
+${B}LEGEND${N}: ${Y}*${N} = requires sudo    ${M}◦${N} = included in privacy-on
 
 ${B}PRIVACY${N}
-  ${Y}*${N} hostname [name]         Change hostname
-  ${Y}*${N} timezone [zone]         Change timezone
-  ${Y}*${N} dns                     Set DNS to LibreDNS + Quad9
+  ${Y}*${N} privacy-on              Activate privacy mode (checklist + snapshot)
+  ${Y}*${N} privacy-off             Restore state now (without reboot)
+  ${Y}*${N} privacy-status          Show privacy mode status
+  ${Y}*${N} privacy-restore         Internal: called by systemd on reboot
+  ${Y}*${N} ${M}◦${N} hostname [name]       Change hostname
+  ${Y}*${N} ${M}◦${N} timezone [zone]       Change timezone
+  ${Y}*${N} ${M}◦${N} dns                   Set DNS to LibreDNS + Quad9
   ${Y}*${N} mac [iface] [mac]       Random or custom MAC
-  ${Y}*${N} mac-all                 Randomize all interfaces
-  ${Y}*${N} swap-off                Disable swap (session only, non-persistent)
-  ${Y}*${N} tmpfs                   Mount /tmp as RAM (tmpfs)
+  ${Y}*${N} ${M}◦${N} mac-all               Randomize all interfaces
+  ${Y}*${N} ${M}◦${N} swap-off              Disable swap (session only, non-persistent)
+  ${Y}*${N} ${M}◦${N} tmpfs                 Mount /tmp as RAM (tmpfs)
+  ${Y}*${N} ${M}◦${N} ipv6-disable          Disable IPv6 (sysctl, non-persistent)
+  ${Y}*${N} ipv6-enable             Re-enable IPv6
 
 ${B}PRIVACY-EXTRA${N}
-    spoof-tz-env [zone]     Show TZ export command for current session
-    history-disable         Disable shell history (print instructions)
-    strip-meta <file>       Strip metadata from file (exiftool)
+    ${M}◦${N} spoof-tz-env [zone]       Show TZ export command for current session
+    ${M}◦${N} history-disable           Disable shell history (print instructions)
+    strip-meta <file>           Strip metadata from file (exiftool)
 
 ${B}CRYPTO${N}
-    passwd [len]            Generate strong password
-    ssh-key [name]          Generate ed25519 SSH key
-    ssh-copy [name]         Copy public key to clipboard
-    ssh-add-auth [name]     Add public key to authorized_keys
-    ssh-del-auth [name]     Remove public key from authorized_keys
-    encrypt <file>          Encrypt file with age (or gpg)
-    decrypt <file.age>      Decrypt age file
-    encrypt-dir <dir>       Encrypt directory → .tar.age/.tar.gpg
-    decrypt-dir <archive>   Decrypt directory archive
+    passwd [len]                Generate strong password (Argon2id hash)
+    ssh-key [name]              Generate ed25519 SSH key
+    ssh-copy [name]             Copy public key to clipboard
+    ssh-add-auth [name]         Add public key to authorized_keys
+    ssh-del-auth [name]         Remove public key from authorized_keys
+    encrypt <file>              Encrypt file with age (or gpg)
+    decrypt <file.age>          Decrypt age file
+    encrypt-dir <dir>           Encrypt directory → .tar.age/.tar.gpg
+    decrypt-dir <archive>       Decrypt directory archive
+    vault-init <vault-dir>      Initialize gocryptfs vault
+    vault-mount <vault> [mnt]   Mount gocryptfs vault
+    vault-umount <mnt>          Unmount gocryptfs vault
+    vault-status                List mounted gocryptfs vaults
 
 ${B}ANTI-FORENSIC${N}
     wipe <path>             Securely delete file/dir (shred)
   ${Y}*${N} wipe-tmp                Wipe /tmp and /var/tmp
-    wipe-history            Wipe shell history
+    ${M}◦${N} wipe-history          Wipe shell history
     wipe-cache              Wipe browser/cache dirs
+  ${Y}*${N} ${M}◦${N} wipe-log              Wipe logs & system traces
 
 ${B}FINGERPRINT${N}
     fingerprint             Show browser/HTTP fingerprint
@@ -212,6 +238,159 @@ echo "[✓] History disabled for this shell session."
 EOF
 }
 
+cmd_privacy_on() {
+    if [[ -f "$SNAPSHOT_DIR/active" ]]; then
+        warn "Privacy mode already active."
+        info "Run 'nipex privacy-off' to restore, or reboot."
+        exit 1
+    fi
+
+    info "Creating snapshot..."
+    mkdir -p "$SNAPSHOT_DIR"
+    hostname > "$SNAPSHOT_DIR/hostname"
+    timedatectl show -p Timezone --value > "$SNAPSHOT_DIR/timezone"
+    date +%s > "$SNAPSHOT_DIR/active"
+
+    info "Installing systemd restore unit..."
+    cat > "$SYSTEMD_UNIT" << 'EOF'
+[Unit]
+Description=NipeX privacy session restore
+Before=shutdown.target reboot.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nipex privacy-restore
+
+[Install]
+WantedBy=shutdown.target
+EOF
+    systemctl daemon-reload
+    systemctl enable nipex-privacy-restore.service >/dev/null 2>&1 || true
+
+    info "Applying privacy changes..."
+    local anon_host="DESKTOP-$(tr -dc 'A-Z0-9' < /dev/urandom | head -c 7)"
+
+    echo
+    info "[1/11] hostname → $anon_host"
+    hostnamectl set-hostname "$anon_host"
+
+    info "[2/11] timezone → UTC"
+    timedatectl set-timezone "UTC"
+
+    info "[3/11] dns"
+    cmd_dns
+
+    info "[4/11] mac-all"
+    cmd_mac_all
+
+    info "[5/11] ipv6-disable"
+    cmd_ipv6_disable
+
+    info "[6/11] swap-off"
+    cmd_swap_off
+
+    info "[7/11] tmpfs"
+    cmd_tmpfs
+
+    echo
+    info "[8/11] spoof-tz-env"
+    cmd_spoof_tz_env "UTC"
+
+    echo
+    info "[9/11] history-disable"
+    cmd_history_disable
+
+    echo
+    info "[10/11] wipe-history"
+    cmd_wipe_history
+
+    echo
+    info "[11/11] wipe-log"
+    NIPEX_NO_CONFIRM=1 cmd_wipe_log
+
+    echo
+    echo "${B}Manual steps required (run in your shell):${N}"
+    echo "  1. Disable history : ${Y}source <(nipex history-disable-export)${N}"
+    echo "  2. Clear in-memory : ${Y}history -c && history -w${N}"
+    echo "  3. Change your IP  : ${Y}nipex start-tor${N}"
+    echo "     If it fails     : ${Y}nipex restart-tor${N}"
+}
+
+cmd_privacy_off() {
+    if [[ ! -f "$SNAPSHOT_DIR/active" ]]; then
+        warn "No active privacy mode."
+        return
+    fi
+
+    info "Restoring state..."
+
+    if [[ -f "$SNAPSHOT_DIR/hostname" ]]; then
+        local orig; orig="$(cat "$SNAPSHOT_DIR/hostname")"
+        hostnamectl set-hostname "$orig" && ok "Hostname restored: $orig"
+    fi
+
+    if [[ -f "$SNAPSHOT_DIR/timezone" ]]; then
+        local orig_tz; orig_tz="$(cat "$SNAPSHOT_DIR/timezone")"
+        timedatectl set-timezone "$orig_tz" && ok "Timezone restored: $orig_tz"
+    fi
+
+    cmd_ipv6_enable
+
+    if systemctl is-enabled nipex-privacy-restore.service >/dev/null 2>&1; then
+        systemctl disable nipex-privacy-restore.service >/dev/null 2>&1 || true
+        rm -f "$SYSTEMD_UNIT"
+        systemctl daemon-reload
+        ok "Systemd restore unit removed."
+    fi
+
+    rm -rf "$SNAPSHOT_DIR"
+    ok "Privacy mode OFF."
+}
+
+cmd_privacy_status() {
+    if [[ ! -f "$SNAPSHOT_DIR/active" ]]; then
+        info "Privacy mode: ${B}INACTIVE${N}"
+        return
+    fi
+
+    local started
+    started=$(cat "$SNAPSHOT_DIR/active")
+
+    ok "Privacy mode: ${B}ACTIVE${N}"
+    echo "  Started        : $(date -d "@$started" '+%F %T')"
+    echo "  Original host  : $(cat "$SNAPSHOT_DIR/hostname" 2>/dev/null || echo unknown)"
+    echo "  Original tz    : $(cat "$SNAPSHOT_DIR/timezone" 2>/dev/null || echo unknown)"
+    echo "  Current host   : $(hostname)"
+    echo "  Current tz     : $(timedatectl show -p Timezone --value 2>/dev/null || echo unknown)"
+
+    local ipv6_state
+    if [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || echo 0)" == "1" ]]; then
+        ipv6_state="disabled"
+    else
+        ipv6_state="enabled"
+    fi
+    echo "  IPv6           : $ipv6_state"
+    echo
+    echo "  Restore now    : nipex privacy-off"
+    echo "  Restore on boot: reboot (systemd unit)"
+    echo
+    echo "${B}Manual steps (if not done yet):${N}"
+    echo "  Disable history : ${Y}source <(nipex history-disable-export)${N}"
+    echo "  Clear in-memory : ${Y}history -c && history -w${N}"
+    echo "  Change your IP  : ${Y}nipex start-tor${N}"
+}
+
+cmd_privacy_restore() {
+    [[ -f "$SNAPSHOT_DIR/active" ]] || return 0
+
+    [[ -f "$SNAPSHOT_DIR/hostname" ]] && \
+        hostnamectl set-hostname "$(cat "$SNAPSHOT_DIR/hostname")" 2>/dev/null || true
+
+    [[ -f "$SNAPSHOT_DIR/timezone" ]] && \
+        timedatectl set-timezone "$(cat "$SNAPSHOT_DIR/timezone")" 2>/dev/null || true
+}
+
 cmd_strip_meta() {
     local target="${1:-}"
     [[ -z "$target" ]] && { err "Usage: nipex strip-meta <file>"; exit 1; }
@@ -288,17 +467,61 @@ cmd_tmpfs() {
     ok "/tmp is now tmpfs (will not survive reboot)."
 }
 
+cmd_ipv6_disable() {
+    if [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || echo 0)" == "1" ]]; then
+        ok "IPv6 already disabled."
+        return
+    fi
+
+    info "Disabling IPv6 (session only)..."
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null
+    sysctl -w net.ipv6.conf.lo.disable_ipv6=1 >/dev/null
+
+    ok "IPv6 disabled (non-persistent — will return after reboot)."
+    info "Verify: ip -6 addr"
+}
+
+cmd_ipv6_enable() {
+    if [[ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || echo 1)" == "0" ]]; then
+        ok "IPv6 already enabled."
+        return
+    fi
+
+    info "Enabling IPv6..."
+    sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null
+    sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null
+    sysctl -w net.ipv6.conf.lo.disable_ipv6=0 >/dev/null
+
+    ok "IPv6 enabled."
+    info "Verify: ip -6 addr"
+}
+
 cmd_passwd() {
     local len="${1:-20}"
     [[ "$len" =~ ^[0-9]+$ && "$len" -ge 4 && "$len" -le 256 ]] \
         || { err "Length must be 4–256."; exit 1; }
+
+    need_dep argon2
+
+    local pass
     if command -v openssl >/dev/null; then
-        openssl rand -base64 $(( len * 2 )) | tr -dc 'A-Za-z0-9!@#$%^&*()_+-=' | cut -c1-"$len"
+        pass=$(openssl rand -base64 $(( len * 2 )) | tr -dc 'A-Za-z0-9!@#$%^&*()_+-=' | cut -c1-"$len")
     else
-        LC_ALL=C head -c $(( len * 4 )) /dev/urandom \
-            | LC_ALL=C tr -dc 'A-Za-z0-9!@#$%^&*()_+-=' | cut -c1-"$len"
+        pass=$(LC_ALL=C head -c $(( len * 4 )) /dev/urandom \
+            | LC_ALL=C tr -dc 'A-Za-z0-9!@#$%^&*()_+-=' | cut -c1-"$len")
     fi
-    echo
+
+    local salt hash
+    if command -v openssl >/dev/null; then
+        salt=$(openssl rand -hex 8)
+    else
+        salt=$(LC_ALL=C head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    fi
+    hash=$(printf '%s' "$pass" | argon2 "$salt" -id -t 3 -m 16 -p 4 -e)
+
+    echo "${B}Password:${N} $pass"
+    echo "${B}Argon2id:${N} $hash"
 }
 
 cmd_ssh_key() {
@@ -473,6 +696,103 @@ cmd_decrypt_dir() {
     esac
 }
 
+cmd_vault_init() {
+    local cipher="${1:-}"
+    [[ -z "$cipher" ]] && { err "Usage: nipex vault-init <cipher-dir>"; exit 1; }
+
+    need_dep gocryptfs
+
+    local abs; abs="$(realpath -m "$cipher")"
+    [[ "$abs" == "/" ]] && { err "Refusing to init vault at /"; exit 1; }
+
+    if [[ -f "$abs/gocryptfs.conf" ]]; then
+        err "Vault already initialized: $abs"
+        info "Use 'nipex vault-mount $abs <mountpoint>' to mount it."
+        exit 1
+    fi
+
+    info "Initializing gocryptfs vault at: $abs"
+    warn "Save the master key that will be printed — it is the ONLY recovery method if you forget the password."
+    echo
+
+    mkdir -p "$abs"
+    gocryptfs -init "$abs"
+
+    echo
+    ok "Vault initialized: $abs"
+    echo "  Encrypted data : $abs"
+    echo "  Mount command  : nipex vault-mount $abs /path/to/mountpoint"
+}
+
+cmd_vault_mount() {
+    local cipher="${1:-}"
+    local mountpoint="${2:-}"
+    [[ -z "$cipher" ]] && { err "Usage: nipex vault-mount <cipher-dir> [mountpoint]"; exit 1; }
+
+    need_dep gocryptfs
+
+    local abs_cipher; abs_cipher="$(realpath -m "$cipher")"
+    [[ -f "$abs_cipher/gocryptfs.conf" ]] || { err "Not a gocryptfs vault: $abs_cipher"; exit 1; }
+
+    if [[ -z "$mountpoint" ]]; then
+        mountpoint="${abs_cipher}.open"
+        info "No mountpoint given — using default: $mountpoint"
+    fi
+
+    local abs_mnt; abs_mnt="$(realpath -m "$mountpoint")"
+    mkdir -p "$abs_mnt"
+
+    if mount | grep -q "on $abs_mnt type fuse.gocryptfs"; then
+        warn "Already mounted: $abs_mnt"
+        return
+    fi
+
+    info "Mounting vault..."
+    info "  Cipher     : $abs_cipher"
+    info "  Mountpoint : $abs_mnt"
+    echo
+
+    if gocryptfs "$abs_cipher" "$abs_mnt"; then
+        ok "Vault mounted: $abs_mnt"
+        echo "  Unmount with: nipex vault-umount $abs_mnt"
+    else
+        err "Mount failed."
+        exit 1
+    fi
+}
+
+cmd_vault_umount() {
+    local mountpoint="${1:-}"
+    [[ -z "$mountpoint" ]] && { err "Usage: nipex vault-umount <mountpoint>"; exit 1; }
+
+    local abs_mnt; abs_mnt="$(realpath -m "$mountpoint")"
+
+    if ! mount | grep -q "on $abs_mnt type fuse.gocryptfs"; then
+        warn "Not a gocryptfs mountpoint: $abs_mnt"
+        return
+    fi
+
+    info "Unmounting: $abs_mnt"
+
+    if fusermount -u "$abs_mnt" 2>/dev/null; then
+        ok "Vault unmounted: $abs_mnt"
+    elif umount "$abs_mnt" 2>/dev/null; then
+        ok "Vault unmounted: $abs_mnt"
+    else
+        err "Failed to unmount. Close any files/terminals inside the mountpoint first."
+        exit 1
+    fi
+}
+
+cmd_vault_status() {
+    info "Active gocryptfs mounts:"
+    if mount | grep 'type fuse.gocryptfs'; then
+        ok "Found mounted vault(s)."
+    else
+        warn "No gocryptfs vault currently mounted."
+    fi
+}
+
 cmd_wipe() {
     local target="${1:-}"
     [[ -z "$target" ]] && { err "Usage: nipex wipe <path>"; exit 1; }
@@ -564,6 +884,83 @@ cmd_wipe_cache() {
     ok "Caches wiped."
 }
 
+cmd_wipe_log() {
+    shopt -s nullglob
+
+    local user_files=(
+        "$HOME/.xsession-errors"
+        "$HOME/.xsession-errors.old"
+        "$HOME/.bash_history"
+        "$HOME/.zsh_history"
+        "$HOME/.python_history"
+        "$HOME/.lesshst"
+        "$HOME/.viminfo"
+        "$HOME/.mysql_history"
+        "$HOME/.psql_history"
+        "$HOME/.sqlite_history"
+        "$HOME/.wget-hsts"
+    )
+
+    local user_dirs=(
+        "$HOME/.local/share/xorg"
+        "$HOME/.cache/logs"
+    )
+
+    local zcompdump=("$HOME"/.zcompdump-*)
+
+    shopt -u nullglob
+
+    warn "This will wipe:"
+    warn "  - User shell history & editor histories"
+    warn "  - wget HSTS cache"
+    warn "  - zsh completion cache (.zcompdump-*)"
+    warn "  - System logs (/var/log) & systemd journal"
+    if [[ "${NIPEX_NO_CONFIRM:-0}" != "1" ]]; then
+        read -rp "Confirm? [y/N] " ans || { warn "Cancelled."; return; }
+        [[ "$ans" =~ ^[yY]$ ]] || { warn "Cancelled."; return; }
+    fi
+
+    info "Wiping user log files..."
+    for f in "${user_files[@]}"; do
+        [[ -f "$f" ]] || continue
+        shred -uz -n 3 "$f" 2>/dev/null && info "Wiped: $f"
+    done
+
+    info "Wiping user log directories..."
+    for d in "${user_dirs[@]}"; do
+        [[ -d "$d" && "$d" == "$HOME"/* ]] || continue
+        info "Wiping: $d"
+        find "$d" -mindepth 1 -type f -exec shred -uz -n 1 {} \; 2>/dev/null || true
+    done
+
+    if [[ ${#zcompdump[@]} -gt 0 ]]; then
+        info "Wiping zsh completion cache..."
+        for f in "${zcompdump[@]}"; do
+            [[ -f "$f" && "$f" == "$HOME"/* ]] || continue
+            shred -uz -n 1 "$f" 2>/dev/null && info "Wiped: $f"
+        done
+    fi
+
+    info "Deleting rotated system logs..."
+    find /var/log -mindepth 1 -type f \
+        \( -name "*.gz" -o -name "*.old" -o -name "*.[0-9]" \) \
+        -delete 2>/dev/null || true
+
+    info "Truncating active system logs..."
+    find /var/log -mindepth 1 -type f \
+        -name "*.log" \
+        -exec truncate -s 0 {} \; 2>/dev/null || \
+        warn "Some system log files could not be truncated."
+
+    if [[ -d /var/log/journal ]]; then
+        info "Vacuuming systemd journal..."
+        journalctl --rotate 2>/dev/null || true
+        journalctl --vacuum-time=1s 2>/dev/null || true
+        ok "Journal vacuumed."
+    fi
+    ok "Logs & traces wiped."
+}
+
 cmd_fingerprint() {
     need_dep curl
     info "Fetching HTTP fingerprint (what servers see)..."
@@ -596,7 +993,10 @@ cmd_tor() {
     ( cd "$NIPE_DIR" && perl nipe.pl "$1" )
 }
 
-ROOT_CMDS=(hostname timezone dns mac mac-all swap-off tmpfs wipe-tmp
+ROOT_CMDS=(hostname timezone dns mac mac-all swap-off tmpfs
+           ipv6-disable ipv6-enable
+           wipe-tmp wipe-log
+           privacy-on privacy-off privacy-restore
            install install-tor start-tor stop-tor restart-tor status-tor)
 
 main() {
@@ -612,6 +1012,10 @@ main() {
         hostname)             cmd_hostname "$@" ;;
         timezone)             cmd_timezone "$@" ;;
         dns)                  cmd_dns ;;
+        privacy-on)           cmd_privacy_on ;;
+        privacy-off)          cmd_privacy_off ;;
+        privacy-status)       cmd_privacy_status ;;
+        privacy-restore)      cmd_privacy_restore ;;
         spoof-tz-env)         cmd_spoof_tz_env "$@" ;;
         history-disable)      cmd_history_disable ;;
         history-disable-export) cmd_history_disable_export ;;
@@ -620,6 +1024,8 @@ main() {
         mac-all)              cmd_mac_all ;;
         swap-off)             cmd_swap_off ;;
         tmpfs)                cmd_tmpfs ;;
+        ipv6-disable)         cmd_ipv6_disable ;;
+        ipv6-enable)          cmd_ipv6_enable ;;
         passwd)               cmd_passwd "$@" ;;
         ssh-key)              cmd_ssh_key "$@" ;;
         ssh-copy)             cmd_ssh_copy "$@" ;;
@@ -629,10 +1035,15 @@ main() {
         decrypt)              cmd_decrypt "$@" ;;
         encrypt-dir)          cmd_encrypt_dir "$@" ;;
         decrypt-dir)          cmd_decrypt_dir "$@" ;;
+        vault-init)           cmd_vault_init "$@" ;;
+        vault-mount)          cmd_vault_mount "$@" ;;
+        vault-umount)         cmd_vault_umount "$@" ;;
+        vault-status)         cmd_vault_status ;;
         wipe)                 cmd_wipe "$@" ;;
         wipe-tmp)             cmd_wipe_tmp ;;
         wipe-history)         cmd_wipe_history ;;
         wipe-cache)           cmd_wipe_cache ;;
+        wipe-log)             cmd_wipe_log ;;
         fingerprint)          cmd_fingerprint ;;
         install-tor)          cmd_install_tor ;;
         start-tor)            cmd_tor start ;;
