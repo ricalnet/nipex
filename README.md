@@ -17,16 +17,16 @@ NipeX (Nipe Extended) is a fork of [Nipe](https://github.com/htrgouvea/nipe) by 
 
 NipeX uses [Nipe](https://github.com/htrgouvea/nipe) as its Tor engine. When you run `nipex start-tor`, it calls the upstream `nipe.pl` script to route your traffic through the Tor network as the default gateway.
 
-> The obfs4 bridge deployment feature that previously shipped with NipeX has been moved to a dedicated guide in the digital-independence wiki. See [Obfs4 — Deployment & Theory Guide](https://git.ricalnet.my.id/rical/digital-independence/wiki/Obfs4-%E2%80%94-Panduan-deployment-dan-Pemahaman-Teori). It now uses `podman-compose` (rootless) — no Docker daemon required.
+> The obfs4 bridge deployment feature that previously shipped with NipeX has been moved to a dedicated guide in the digital-independence wiki. See [Obfs4 — Deployment & Theory Guide](https://docs.ricalnet.my.id/posts/panduan-aktivis-untuk-menyebarkan-tor-bridge-obfs4/). It now uses `podman-compose` (rootless) — no Docker daemon required.
 
 ### Privacy Mode
 
-`privacy-on` is a one-command privacy session that applies 11 changes to the system, snapshots the original state in RAM, and auto-restores everything on reboot via a systemd unit. Non-persistent changes (MAC, swap, tmpfs, IPv6) reset automatically.
+`privacy-on` is a one-command privacy session that applies 11 changes to the system, snapshots the original state in RAM, and auto-restores it on the next boot via a self-disabling systemd unit. Non-persistent changes (MAC, swap, tmpfs, IPv6) reset automatically because the reboot undoes them.
 
 ```bash
 nipex privacy-on       # activate (snapshot + 11 changes)
 nipex privacy-status   # check status + IPv6 state + manual steps
-nipex privacy-off      # restore hostname + timezone + IPv6
+nipex privacy-off      # restore hostname + timezone + IPv6 now
 ```
 
 What privacy-on does (11 steps):
@@ -36,9 +36,9 @@ What privacy-on does (11 steps):
 | 1 | Random Windows-style hostname (`DESKTOP-XXXXXXX`) | Snapshot-restored |
 | 2 | Timezone → UTC | Snapshot-restored |
 | 3 | DNS → LibreDNS + Quad9 | Session only |
-| 4 | MAC randomization (all interfaces) | Auto-reset on reboot |
+| 4 | MAC randomization (all physical interfaces) | Auto-reset on reboot |
 | 5 | IPv6 disable | Auto-reset on reboot |
-| 6 | Swap off | Auto-reset on reboot |
+| 6 | Swap off (skips zram) | Auto-reset on reboot |
 | 7 | `/tmp` as tmpfs | Auto-reset on reboot |
 | 8 | `spoof-tz-env` (prints `TZ=UTC` for shell) | Shell-only |
 | 9 | `history-disable` (prints shell instructions) | Shell-only |
@@ -51,7 +51,9 @@ After privacy-on, manual steps required (shown at the end of the command output)
 2. `history -c && history -w` — clear in-memory history
 3. `nipex start-tor` — change your IP via Tor (use `nipex restart-tor` if it fails)
 
-Auto-restore: A systemd unit (`nipex-privacy-restore.service`) restores hostname and timezone on shutdown/reboot. Non-persistent changes reset on their own.
+A systemd unit (`nipex-privacy-restore.service`) runs on the next boot (`WantedBy=multi-user.target`, `After=local-fs.target dev-shm.mount`) and restores hostname and timezone before login. The unit disables itself automatically after the first successful run — it will not run again on subsequent boots unless you re-activate `privacy-on`. The snapshot lives in `/dev/shm/nipex-session/` (RAM-only, `chmod 700`, owned by root), so it disappears with the reboot.
+
+If a non-critical step fails (e.g. DNS when no default interface is present), `privacy-on` logs a warning and continues. Only fatal failures abort the sequence.
 
 > Commands marked with `*` in `nipex help` require `sudo`. Commands marked with `◦` are included in `privacy-on`.
 
@@ -63,15 +65,15 @@ Auto-restore: A systemd unit (`nipex-privacy-restore.service`) restores hostname
 | `privacy-on` `*` `◦` | Activate privacy mode (11 steps + snapshot) |
 | `privacy-off` `*` | Restore hostname, timezone, IPv6 now |
 | `privacy-status` | Show privacy mode status + IPv6 state |
-| `privacy-restore` `*` | Internal — called by systemd on reboot |
+| `privacy-restore` `*` | Internal — called by systemd on boot |
 | `hostname [name]` `*` `◦` | Change system hostname |
 | `timezone [zone]` `*` `◦` | Change system timezone |
-| `dns` `*` `◦` | Set DNS to LibreDNS + Quad9 |
+| `dns` `*` `◦` | Set DNS to LibreDNS + Quad9 (via systemd-resolved) |
 | `mac [iface] [mac]` `*` | Randomize or set MAC address |
-| `mac-all` `*` `◦` | Randomize MAC on all interfaces |
-| `swap-off` `*` `◦` | Disable swap (session only, non-persistent) |
-| `tmpfs` `*` `◦` | Mount `/tmp` as RAM (tmpfs) |
-| `ipv6-disable` `*` `◦` | Disable IPv6 (sysctl, non-persistent) |
+| `mac-all` `*` `◦` | Randomize MAC on all physical interfaces |
+| `swap-off` `*` `◦` | Disable swap (session only, skips zram) |
+| `tmpfs` `*` `◦` | Mount `/tmp` as RAM (tmpfs, size via `NIPEX_TMPFS_SIZE`) |
+| `ipv6-disable` `*` `◦` | Disable IPv6 (sysctl, flush addresses, non-persistent) |
 | `ipv6-enable` `*` | Re-enable IPv6 |
 
 #### Privacy Extra
@@ -87,7 +89,7 @@ Auto-restore: A systemd unit (`nipex-privacy-restore.service`) restores hostname
 |---|---|
 | `passwd [len]` | Generate password + Argon2id hash (default: 20 chars) |
 | `ssh-key [name]` | Generate ed25519 SSH key |
-| `ssh-copy [name]` | Copy public key to clipboard (`xclip`) |
+| `ssh-copy [name]` | Copy public key to clipboard (Wayland: `wl-copy`; X11: `xclip`/`xsel`) |
 | `ssh-add-auth [name]` | Add public key to `authorized_keys` |
 | `ssh-del-auth [name]` | Remove public key from `authorized_keys` |
 | `encrypt <file>` | Encrypt file with `age` (or `gpg` fallback) |
@@ -102,9 +104,9 @@ Auto-restore: A systemd unit (`nipex-privacy-restore.service`) restores hostname
 #### Anti-Forensic
 | Command | Description |
 |---|---|
-| `wipe <path>` | Securely delete file/dir (`shred`) |
+| `wipe <path>` | Securely delete file/dir (`shred`, refuses symlinks) |
 | `wipe-tmp` `*` | Wipe `/tmp` and `/var/tmp` |
-| `wipe-history` `◦` | Wipe shell history files |
+| `wipe-history` `◦` | Wipe shell history (bash, zsh, python, fish) |
 | `wipe-cache` | Wipe browser caches (Firefox, Chromium, Chrome, Brave) |
 | `wipe-log` `*` `◦` | Wipe logs, journal, HSTS, zcompdump, editor histories |
 
@@ -141,7 +143,9 @@ Optional dependencies (installed on demand by the relevant commands):
 | `macchanger` | `mac`, `mac-all` |
 | `age` | `encrypt`, `encrypt-dir` (preferred) |
 | `gpg` | fallback for `encrypt`, `encrypt-dir` |
-| `xclip` | `ssh-copy` |
+| `wl-clipboard` | `ssh-copy` (Wayland, preferred) |
+| `xclip` | `ssh-copy` (X11, fallback) |
+| `xsel` | `ssh-copy` (X11, fallback) |
 | `exiftool` | `strip-meta` (pkg: `libimage-exiftool-perl`) |
 | `curl` | `fingerprint` |
 | `argon2` | `passwd` |
@@ -156,7 +160,7 @@ cd nipex
 sudo apt update
 sudo apt install -y \
     macchanger openssl curl gpg age argon2 gocryptfs \
-    libimage-exiftool-perl xclip cpanminus
+    libimage-exiftool-perl xclip xsel wl-clipboard cpanminus
 
 sudo cpanm --installdeps .
 
@@ -177,7 +181,7 @@ nipex help        # full list (legend: * = sudo, ◦ = in privacy-on)
 #### Privacy Mode
 
 ```bash
-# Activate privacy session (11 steps + snapshot + auto-restore)
+# Activate privacy session (11 steps + snapshot + auto-restore on next boot)
 nipex privacy-on
 
 # After activation, run the manual steps printed at the end:
@@ -190,7 +194,7 @@ nipex restart-tor
 # Check status anytime
 nipex privacy-status
 
-# Restore now (or just reboot for auto-restore)
+# Restore now (or just reboot for auto-restore on next boot)
 nipex privacy-off
 ```
 
@@ -258,6 +262,9 @@ nipex wipe-log
 nipex fingerprint
 ```
 
+> [!NOTE]
+> `fingerprint` sends a direct HTTP request to `httpbingo.org`, exposing your real IP. Run `nipex start-tor` first if you want the request routed through Tor.
+
 #### Tor
 
 ```bash
@@ -310,26 +317,35 @@ NipeX reads `~/.nipex.conf` if present.
 | `NIPE_DIR` | Directory containing `nipe.pl` | `$SELF_DIR` |
 | `NIPEX_LOG` | Enable logging (`1` = on, `0` = off) | `0` |
 | `NIPEX_LOG_FILE` | Log file path | `$HOME/.nipex.log` |
+| `NIPEX_TMPFS_SIZE` | tmpfs size for `/tmp` (used by `tmpfs` command) | `512M` |
 
 Example:
 
 ```bash
 NIPE_DIR="/home/user/nipe"
 NIPEX_LOG="0"
+NIPEX_TMPFS_SIZE="1G"
 ```
+
+> [!NOTE]
+> When running as root, NipeX refuses to source `~/.nipex.conf` if it is owned by a non-root user or if it is world-writable.
 
 ### Security Notes
 
 - **Logging is off by default** (`NIPEX_LOG=0`) — writing logs to disk defeats the purpose of a privacy tool.
-- **`shred` is not effective on SSD/NVMe/CoW filesystems** (btrfs, ZFS). NipeX prints a warning before wiping.
-- **`swap-off` is session-only** — does not modify `/etc/fstab` or `dphys-swapfile`. Swap returns after reboot.
+- **`shred` is not effective on SSD/NVMe/CoW filesystems** (btrfs, ZFS, overlayfs). NipeX prints a warning before wiping.
+- **`wipe` refuses symlinks** and skips hardlinked files (to avoid corrupting other names).
+- **`swap-off` is session-only** — does not modify `/etc/fstab` or `dphys-swapfile`. Swap returns after reboot. zram devices are skipped on purpose.
 - **`tmpfs` for `/tmp` is not persistent** across reboots.
-- **`ipv6-disable` is session-only** — resets on reboot.
-- **`dns` may be overwritten** by NetworkManager or `systemd-resolved` on reboot when falling back to `/etc/resolv.conf`.
+- **`ipv6-disable` is session-only** — resets on reboot. NipeX disables Router Advertisements, writes per-interface sysctl, and flushes existing global IPv6 addresses.
+- **`dns` uses `systemd-resolved`** when available, sets the interface as the default DNS route (`resolvectl default-route yes`). If `resolvectl` is absent and `/etc/resolv.conf` is a symlink (e.g. to the systemd-resolved stub), NipeX refuses to overwrite it with a plain file.
 - **`privacy-on` does NOT change your IP** — you must run `nipex start-tor` manually. This is by design (explicit control over Tor).
+- **`privacy-on` continues on non-critical step failure** (e.g. DNS when no default interface is present). Only fatal failures abort the sequence.
+- **`privacy-restore` unit self-disables** after the first successful run at boot. It will not run again on subsequent boots unless `privacy-on` is re-executed.
 - **`vault-init` prints a master key** — save it offline. It is the only recovery method if you forget the password. Lost password = lost data.
-- **`wipe-log` requires sudo** for `/var/log` and `journalctl`. It truncates active logs (safe for services) and deletes rotated logs.
+- **`wipe-log` requires sudo** for `/var/log` and `journalctl`. It truncates active logs and deletes rotated logs. Truncating may break audit tools (`last`, `who`, `ausearch`).
 - **`privacy-on` wipes shell history and logs permanently.** This cannot be undone. Manual steps (`history -c && history -w`, `source <(...)`) must be run by you — the script cannot affect your parent shell.
+- **`sudo` escalation is hardened** — NipeX does not use `sudo -E`. Only the environment variables it needs (`NIPE_DIR`, `NIPEX_LOG`, `NIPEX_LOG_FILE`, `TERM`) are passed through to the root shell.
 
 ### Migration Notes
 
@@ -356,13 +372,24 @@ NipeX v0.1 rewrites the tool from an interactive menu into a CLI subcommand inte
 
 #### v0.1.2 — Privacy Mode + IPv6
 
-- **New:** `privacy-on` / `privacy-off` / `privacy-status` / `privacy-restore` — one-command privacy session with snapshot + auto-restore
-- **New:** `ipv6-disable` / `ipv6-enable` — session-only IPv6 control
+- **New:** `privacy-on` / `privacy-off` / `privacy-status` / `privacy-restore` — one-command privacy session with snapshot + auto-restore on the **next boot**
+- **New:** `ipv6-disable` / `ipv6-enable` — session-only IPv6 control with RA disable and address flush
 - **New:** help legend `◦` — marks commands included in `privacy-on`
+- **New:** `spoof-tz-env`, `history-disable`, `history-disable-export`, `strip-meta` (Privacy Extra)
+- **New:** `vault-init` / `vault-mount` / `vault-umount` / `vault-status` (gocryptfs)
+- **New:** `passwd` (Argon2id), `wipe-log` (logs, journal, HSTS, zcompdump, editor histories)
 - **Changed:** Tor is no longer auto-started by `privacy-on` — user runs `nipex start-tor` manually (explicit IP control)
-- **Improved:** `passwd` uses Argon2id (via `argon2` CLI) instead of plaintext only
+- **Changed:** `privacy-restore` runs at **boot**, not at shutdown, and disables itself after the first successful run
+- **Improved:** `passwd` guarantees requested length without `tr -dc` truncation bias
+- **Improved:** `wipe-history` also covers fish shell
 - **Improved:** `wipe-cache` also covers Brave (`Brave-Browser` / `Brave-Origin`)
-- **Improved:** `wipe-log` also wipes HSTS, zcompdump, and editor histories
+- **Improved:** `ssh-copy` supports Wayland (`wl-copy`) and `xsel` as fallbacks
+- **Improved:** `mac-all` filters out virtual interfaces (docker, br-, veth, wg, etc.)
+- **Improved:** `swap-off` skips zram
+- **Improved:** `tmpfs` size configurable via `NIPEX_TMPFS_SIZE`
+- **Improved:** `sudo` escalation no longer uses `sudo -E`; only required env vars are passed through
+- **Improved:** config sourcing validates ownership and mode before `source`
+- **Improved:** ShellCheck-clean (`bash -n nipex && shellcheck -x nipex` produces no output)
 
 **New in v0.1.2:**
 - Privacy mode: `privacy-on`, `privacy-off`, `privacy-status`, `privacy-restore`
